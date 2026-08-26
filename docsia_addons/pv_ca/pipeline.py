@@ -146,7 +146,7 @@ def _fetch_units(sess, cache: Path, row: dict) -> list:
     return units
 
 
-def run(run_id, trigger="manual", apply=False, page_urls=None, years=(2010, 2100)):
+def run(run_id, trigger="manual", apply=False, page_urls=None, years=(2010, 2100), limit=None):
     conn, p = connect(), Paperless()
     defs = p.custom_fields()
     cache = Path(env("CACHE_DIR", "./cache")); (cache / "zip").mkdir(parents=True, exist_ok=True)
@@ -158,8 +158,15 @@ def run(run_id, trigger="manual", apply=False, page_urls=None, years=(2010, 2100
     cksums = _checksum_map(p)
     sess = _session()
     c = {}
+    processed = 0
     for row in items:
         c["discovered"] = c.get("discovered", 0) + 1
+        if runs.already_done(conn, SRC, row["origin_url"]):
+            c["skipped"] = c.get("skipped", 0) + 1
+            continue
+        if limit and processed >= limit:
+            break
+        processed += 1
         row = dict(row, run_id=run_id)
         try:
             units = _fetch_units(sess, cache, row)

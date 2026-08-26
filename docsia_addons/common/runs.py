@@ -105,3 +105,15 @@ def quarantine(conn, item_id):
         cur.execute(f"UPDATE {S}.items SET quarantined_at=now(), status='QUARANTINE', "
                     f"updated_at=now() WHERE id=%s", (item_id,))
     conn.commit()
+
+
+TERMINAL_STATUS = ("IMPORTED", "METADATA_DONE", "SKIPPED_ALREADY_PRESENT")
+
+
+def already_done(conn, source_key, origin_url) -> bool:
+    """Vrai si cet origin_url a déjà atteint un statut terminal (évite un re-téléchargement)."""
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT 1 FROM {S}.items WHERE source_key=%s AND origin_url=%s "
+                    f"AND status = ANY(%s) LIMIT 1",
+                    (source_key, origin_url, list(TERMINAL_STATUS)))
+        return cur.fetchone() is not None

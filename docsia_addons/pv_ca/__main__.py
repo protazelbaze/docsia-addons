@@ -34,7 +34,7 @@ def main():
     sub.add_parser("initdb")
     sub.add_parser("discover")
     b = sub.add_parser("backfill"); b.add_argument("--apply", action="store_true"); b.add_argument("--limit", type=int)
-    r = sub.add_parser("run"); r.add_argument("--apply", action="store_true"); r.add_argument("--run-id"); r.add_argument("--trigger", default="manual")
+    r = sub.add_parser("run"); r.add_argument("--apply", action="store_true"); r.add_argument("--run-id"); r.add_argument("--trigger", default="manual"); r.add_argument("--limit", type=int)
     rt = sub.add_parser("retry"); rt.add_argument("--apply", action="store_true", default=True)
     co = sub.add_parser("controls"); co.add_argument("--ocr-limit", type=int)
     pc = sub.add_parser("prune-cache"); pc.add_argument("--apply", action="store_true"); pc.add_argument("--days", type=int)
@@ -54,7 +54,7 @@ def main():
         backfill_session_ref(apply=a.apply, limit=a.limit)
     elif a.cmd == "run":
         from .pipeline import run
-        run(a.run_id or datetime.now().strftime("%Y%m%d_%H%M%S"), trigger=a.trigger, apply=a.apply)
+        run(a.run_id or datetime.now().strftime("%Y%m%d_%H%M%S"), trigger=a.trigger, apply=a.apply, limit=a.limit)
     elif a.cmd == "retry":
         from .pipeline import retry
         retry(apply=a.apply)
