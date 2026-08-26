@@ -1,0 +1,22 @@
+# Conteneur outil de récolte, sans service long-running.
+# Usage : docker compose run --rm pv_ca <commande> [options]
+# Rejoint les réseaux Docker de Paperless (API + PG) et de docsia (PG docsia),
+# sans publier aucun port sur l'hôte.
+services:
+  pv_ca:
+    build: .
+    image: docsia-addons-pv-ca:latest
+    env_file: .env
+    volumes:
+      - /data/docsia-addons/cache:/app/cache
+    networks:
+      - paperless_net
+      - docsia_net
+
+networks:
+  paperless_net:
+    name: paperless_paperless_network
+    external: true
+  docsia_net:
+    name: docker_default
+    external: true

@@ -1,0 +1,16 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+*.log
+cache/
+ca_cache/
+*.pdf
+*.zip
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.ppt
+*.pptx
+.DS_Store
