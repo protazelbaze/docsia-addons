@@ -17,32 +17,37 @@ class Paperless:
 
     # --- custom fields ---
     def custom_fields(self) -> dict:
-        """Renvoie {nom: {'id':.., 'data_type':..}}."""
-        out, url = {}, f"{self.base}/api/custom_fields/?page_size=100"
-        while url:
-            r = self.s.get(url, timeout=self.timeout)
+        """Renvoie {nom: {'id':.., 'data_type':..}} (pagination interne)."""
+        out, page = {}, 1
+        while True:
+            r = self.s.get(f"{self.base}/api/custom_fields/",
+                           params={"page": page, "page_size": 100}, timeout=self.timeout)
             r.raise_for_status()
             data = r.json()
             for f in data.get("results", []):
                 out[f["name"]] = {"id": f["id"], "data_type": f.get("data_type")}
-            url = data.get("next")
+            if not data.get("next"):
+                break
+            page += 1
         return out
 
     # --- documents ---
     def iter_documents(self, query: str | None = None, page_size: int = 100):
-        params = {"page_size": page_size}
-        if query:
-            params["query"] = query
-        url = f"{self.base}/api/documents/"
-        first = True
-        while url:
-            r = self.s.get(url, params=params if first else None, timeout=self.timeout)
+        """Pagine sur l'URL interne (ne suit pas le lien next absolu de Paperless,
+        qui pointe vers l'URL publique et repasserait par Cloudflare Access)."""
+        page = 1
+        while True:
+            params = {"page": page, "page_size": page_size}
+            if query:
+                params["query"] = query
+            r = self.s.get(f"{self.base}/api/documents/", params=params, timeout=self.timeout)
             r.raise_for_status()
             data = r.json()
             for d in data.get("results", []):
                 yield d
-            url = data.get("next")
-            first = False
+            if not data.get("next"):
+                break
+            page += 1
 
     def get_document(self, doc_id: int) -> dict:
         r = self.s.get(f"{self.base}/api/documents/{doc_id}/", timeout=self.timeout)

@@ -146,7 +146,7 @@ def _fetch_units(sess, cache: Path, row: dict) -> list:
     return units
 
 
-def run(run_id, trigger="manual", apply=False, page_urls=None, years=(2010, 2025)):
+def run(run_id, trigger="manual", apply=False, page_urls=None, years=(2010, 2100)):
     conn, p = connect(), Paperless()
     defs = p.custom_fields()
     cache = Path(env("CACHE_DIR", "./cache")); (cache / "zip").mkdir(parents=True, exist_ok=True)
