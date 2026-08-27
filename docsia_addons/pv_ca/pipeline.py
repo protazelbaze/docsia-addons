@@ -3,6 +3,7 @@
 Phases : scrapping -> structuration/stockage -> ingestion Paperless -> métadonnées.
 (L'ingestion IA est réconciliée à part par sync_ia ; elle relève de DOCSIA.)
 """
+import re
 import subprocess
 import tempfile
 import zipfile
@@ -72,6 +73,19 @@ def _custom_fields_payload(defs, unit) -> dict:
     return ids
 
 
+def _duplicate_id(res: dict):
+    """Paperless autoritaire sur les doublons : si l'échec est un doublon,
+    renvoie l'id du document existant (via '(#id)' ou document_id), sinon None."""
+    err = str(res.get("error") or "")
+    if "duplicate" not in err.lower():
+        return None
+    m = re.search(r"#(\d+)", err)
+    if m:
+        return int(m.group(1))
+    did = res.get("document_id")
+    return int(did) if did else None
+
+
 def _finalize_import(conn, p, defs, item_id, pid, unit, c):
     runs.mark(conn, item_id, status="IMPORTED", paperless_id=pid)
     c["imported"] = c.get("imported", 0) + 1
@@ -119,6 +133,11 @@ def process_unit(conn, p, defs, cksums, unit, apply, c):
         if res["status"] == "SUCCESS" and res.get("document_id"):
             _finalize_import(conn, p, defs, item_id, int(res["document_id"]), unit, c)
         elif res["status"] == "FAILURE":
+            dup = _duplicate_id(res)
+            if dup:
+                # Doublon détecté par Paperless (checksum absent de notre map) : on classe comme déjà présent.
+                runs.mark(conn, item_id, status="SKIPPED_ALREADY_PRESENT", paperless_id=dup)
+                return item_id
             raise RuntimeError(f"tâche import échouée: {res}")
         else:
             # File Paperless engorgée : on n'attend pas la fin de l'OCR, on confirmera plus tard.
@@ -285,9 +304,14 @@ def confirm():
                         role=role, delib_number=dnum, expected_title=etitle)
             _finalize_import(conn, p, defs, item_id, int(res["document_id"]), unit, c)
         elif res["status"] == "FAILURE":
-            runs.mark(conn, item_id, status="FAILED", failed_phase="import",
-                      error=str(res.get("error")))
-            c["failed"] = c.get("failed", 0) + 1
+            dup = _duplicate_id(res)
+            if dup:
+                runs.mark(conn, item_id, status="SKIPPED_ALREADY_PRESENT", paperless_id=dup)
+                c["skipped_dup"] = c.get("skipped_dup", 0) + 1
+            else:
+                runs.mark(conn, item_id, status="FAILED", failed_phase="import",
+                          error=str(res.get("error")))
+                c["failed"] = c.get("failed", 0) + 1
         else:
             c["still_pending"] = c.get("still_pending", 0) + 1
     conn.close()
