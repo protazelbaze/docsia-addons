@@ -38,6 +38,7 @@ def main():
     rt = sub.add_parser("retry"); rt.add_argument("--apply", action="store_true", default=True)
     co = sub.add_parser("controls"); co.add_argument("--ocr-limit", type=int)
     pc = sub.add_parser("prune-cache"); pc.add_argument("--apply", action="store_true"); pc.add_argument("--days", type=int)
+    sub.add_parser("confirm")
     sub.add_parser("sync-ia")
 
     a = ap.parse_args()
@@ -69,6 +70,9 @@ def main():
     elif a.cmd == "prune-cache":
         from .prune_cache import prune_cache
         prune_cache(apply=a.apply, days=a.days)
+    elif a.cmd == "confirm":
+        from .pipeline import confirm
+        confirm()
     elif a.cmd == "sync-ia":
         from .pipeline import sync_ia
         sync_ia()

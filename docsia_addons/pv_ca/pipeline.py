@@ -72,6 +72,15 @@ def _custom_fields_payload(defs, unit) -> dict:
     return ids
 
 
+def _finalize_import(conn, p, defs, item_id, pid, unit, c):
+    runs.mark(conn, item_id, status="IMPORTED", paperless_id=pid)
+    c["imported"] = c.get("imported", 0) + 1
+    doc = p.get_document(pid)
+    p.set_custom_fields(pid, p.existing_custom_values(doc), _custom_fields_payload(defs, unit))
+    runs.mark(conn, item_id, phase="metadata", status="METADATA_DONE", paperless_id=pid)
+    c["metadata_done"] = c.get("metadata_done", 0) + 1
+
+
 def process_unit(conn, p, defs, cksums, unit, apply, c):
     """store -> reconcile (sha256) -> import (+poll) -> métadonnées, avec suivi en base."""
     item_id = runs.upsert_item(conn, SRC, unit.get("run_id"), {
@@ -79,7 +88,7 @@ def process_unit(conn, p, defs, cksums, unit, apply, c):
         "member_path_in_zip": unit.get("member_path_in_zip"),
         "seance_date": unit["seance_date"], "role": unit["role"],
         "delib_number": unit.get("delib_number"), "source_title": unit.get("source_title"),
-        "expected_title": unit["expected_title"]})
+        "expected_title": unit["expected_title"], "page_url": unit.get("page_url")})
     try:
         local = Path(unit["local_path"])
         sha = sha256_file(local)
@@ -102,17 +111,16 @@ def process_unit(conn, p, defs, cksums, unit, apply, c):
                 raise RuntimeError("conversion Office sans PDF")
             path, mime = pdfs[0], "application/pdf"
         task = p.post_document(path, unit["expected_title"], mime)
-        runs.mark(conn, item_id, phase="import", status="IMPORT_SUBMITTED")
-        res = p.poll_task(task)
-        if res["status"] != "SUCCESS" or not res.get("document_id"):
-            raise RuntimeError(f"tâche import: {res}")
-        pid = int(res["document_id"])
-        runs.mark(conn, item_id, status="IMPORTED", paperless_id=pid)
-        c["imported"] = c.get("imported", 0) + 1
-        doc = p.get_document(pid)
-        p.set_custom_fields(pid, p.existing_custom_values(doc), _custom_fields_payload(defs, unit))
-        runs.mark(conn, item_id, phase="metadata", status="METADATA_DONE", paperless_id=pid)
-        c["metadata_done"] = c.get("metadata_done", 0) + 1
+        runs.mark(conn, item_id, phase="import", status="IMPORT_SUBMITTED", task_uuid=task)
+        res = p.poll_task(task, tries=5, delay=2)
+        if res["status"] == "SUCCESS" and res.get("document_id"):
+            _finalize_import(conn, p, defs, item_id, int(res["document_id"]), unit, c)
+        elif res["status"] == "FAILURE":
+            raise RuntimeError(f"tâche import échouée: {res}")
+        else:
+            # File Paperless engorgée : on n'attend pas la fin de l'OCR, on confirmera plus tard.
+            runs.mark(conn, item_id, status="IMPORT_PENDING")
+            c["pending"] = c.get("pending", 0) + 1
     except Exception as e:  # noqa: BLE001
         c["errors"] = c.get("errors", 0) + 1
         runs.mark(conn, item_id, status="FAILED", failed_phase="store/import", error=repr(e))
@@ -251,3 +259,34 @@ def sync_ia():
     conn.commit(); conn.close()
     print(f"DONE sync_ia embedded_docs={len(embedded)} items_maj={n}")
     return n
+
+
+def confirm():
+    """Réconcilie les imports en attente : interroge la tâche, finalise ou marque en échec."""
+    conn, p = connect(), Paperless()
+    defs = p.custom_fields()
+    with conn.cursor() as cur:
+        cur.execute("""SELECT id, task_uuid, origin_url, container_url, member_path_in_zip,
+                              page_url, seance_date, role, delib_number, expected_title
+                       FROM recolte.items
+                       WHERE status='IMPORT_PENDING' AND task_uuid IS NOT NULL
+                       ORDER BY id""")
+        rows = cur.fetchall()
+    c = {}
+    for (item_id, task, origin_url, container_url, member, page_url,
+         sdate, role, dnum, etitle) in rows:
+        res = p.poll_task(task, tries=1, delay=0)
+        if res["status"] == "SUCCESS" and res.get("document_id"):
+            unit = dict(origin_url=origin_url, container_url=container_url,
+                        member_path_in_zip=member, page_url=page_url, seance_date=sdate,
+                        role=role, delib_number=dnum, expected_title=etitle)
+            _finalize_import(conn, p, defs, item_id, int(res["document_id"]), unit, c)
+        elif res["status"] == "FAILURE":
+            runs.mark(conn, item_id, status="FAILED", failed_phase="import",
+                      error=str(res.get("error")))
+            c["failed"] = c.get("failed", 0) + 1
+        else:
+            c["still_pending"] = c.get("still_pending", 0) + 1
+    conn.close()
+    print(f"DONE confirm {c}")
+    return c
