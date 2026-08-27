@@ -42,6 +42,14 @@ def finish_run(conn, source_key, run_id, status, **counts):
     conn.commit()
 
 
+def heartbeat(conn, source_key, run_id):
+    """Battement de vivacité : le run est vivant tant que ce timestamp reste frais."""
+    with conn.cursor() as cur:
+        cur.execute(f"UPDATE {S}.runs SET heartbeat_at=now() "
+                    f"WHERE source_key=%s AND run_id=%s", (source_key, run_id))
+    conn.commit()
+
+
 def upsert_item(conn, source_key, run_id, item: dict) -> int:
     item = {"source_key": source_key, "run_id": run_id,
             "container_url": None, "member_path_in_zip": None, "page_url": None,

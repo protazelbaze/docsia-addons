@@ -37,6 +37,22 @@ def _sniff(path: Path) -> str:
     return path.suffix[1:].upper() if path.suffix else "BIN"
 
 
+def _pdf_truncated(path: Path) -> bool:
+    """Vrai si le fichier est un PDF (magic %PDF-) mais sans marqueur %%EOF en fin.
+    Signe d'une troncature, le plus souvent cote source (fichier casse sur le site)."""
+    try:
+        with path.open("rb") as fh:
+            if fh.read(5) != b"%PDF-":
+                return False
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - 4096))
+            tail = fh.read()
+        return b"%%EOF" not in tail
+    except OSError:
+        return False
+
+
 def _checksum_map(p: Paperless) -> dict:
     return {d["checksum"]: d["id"] for d in p.iter_documents() if d.get("checksum")}
 
@@ -127,6 +143,12 @@ def process_unit(conn, p, defs, cksums, unit, apply, c):
             if not pdfs:
                 raise RuntimeError("conversion Office sans PDF")
             path, mime = pdfs[0], "application/pdf"
+        if _pdf_truncated(path):
+            runs.mark(conn, item_id, failed_phase="store",
+                      error="PDF source tronque (pas de %%EOF) - probablement casse cote site UBM")
+            runs.quarantine(conn, item_id)
+            c["quarantaine_source"] = c.get("quarantaine_source", 0) + 1
+            return item_id
         task = p.post_document(path, unit["expected_title"], mime)
         runs.mark(conn, item_id, phase="import", status="IMPORT_SUBMITTED", task_uuid=task)
         res = p.poll_task(task, tries=5, delay=2)
@@ -153,7 +175,10 @@ def process_unit(conn, p, defs, cksums, unit, apply, c):
 def _fetch_units(sess, cache: Path, row: dict) -> list:
     """Télécharge une ressource et renvoie la liste des unités à traiter (fichier ou membres ZIP)."""
     local = _download(sess, cache, row["origin_url"])
-    if _sniff(local) != "ZIP":
+    ext = Path(row["origin_url"].split("#")[0].split("?")[0]).suffix.lower()
+    # Office (docx/xlsx/pptx/odt...) est un ZIP structurellement, mais reste UN document :
+    # on ne l'éclate pas (il sera converti en PDF plus loin). Seuls les vrais .zip sont éclatés.
+    if ext in OFFICE or _sniff(local) != "ZIP":
         return [dict(row, local_path=str(local), container_url=None, member_path_in_zip=None)]
     units = []
     with zipfile.ZipFile(local) as zf:
@@ -184,33 +209,42 @@ def run(run_id, trigger="manual", apply=False, page_urls=None, years=(2010, 2100
                        modality="html-table-scrape",
                        config={"pages": page_urls or [disc.DEFAULT_CURRENT, disc.DEFAULT_ARCHIVES]})
     runs.start_run(conn, SRC, run_id, trigger)
-    items, report = disc.discover(page_urls, years[0], years[1])
-    cksums = _checksum_map(p)
-    sess = _session()
+    runs.heartbeat(conn, SRC, run_id)
     c = {}
-    processed = 0
-    for row in items:
-        c["discovered"] = c.get("discovered", 0) + 1
-        if runs.already_done(conn, SRC, row["origin_url"]):
-            c["skipped"] = c.get("skipped", 0) + 1
-            continue
-        if limit and processed >= limit:
-            break
-        processed += 1
-        row = dict(row, run_id=run_id)
-        try:
-            units = _fetch_units(sess, cache, row)
-        except Exception as e:  # noqa: BLE001
-            c["errors"] = c.get("errors", 0) + 1
-            print("FETCH_FAILED", row["origin_url"], repr(e))
-            continue
-        for u in units:
-            process_unit(conn, p, defs, cksums, u, apply, c)
-    status = "FAILED" if c.get("errors") and not c.get("imported") else ("PARTIAL" if c.get("errors") else "OK")
-    runs.finish_run(conn, SRC, run_id, status, pages_scanned=len(report), **c)
-    conn.close()
-    print(f"DONE run={run_id} status={status} {c} pages={report}")
-    return c
+    try:
+        items, report = disc.discover(page_urls, years[0], years[1])
+        cksums = _checksum_map(p)
+        sess = _session()
+        processed = 0
+        for row in items:
+            c["discovered"] = c.get("discovered", 0) + 1
+            if runs.already_done(conn, SRC, row["origin_url"]):
+                c["skipped"] = c.get("skipped", 0) + 1
+                continue
+            if limit and processed >= limit:
+                break
+            processed += 1
+            if processed % 5 == 0:
+                runs.heartbeat(conn, SRC, run_id)  # battement de vivacité
+            row = dict(row, run_id=run_id)
+            try:
+                units = _fetch_units(sess, cache, row)
+            except Exception as e:  # noqa: BLE001
+                c["errors"] = c.get("errors", 0) + 1
+                print("FETCH_FAILED", row["origin_url"], repr(e))
+                continue
+            for u in units:
+                process_unit(conn, p, defs, cksums, u, apply, c)
+        status = "FAILED" if c.get("errors") and not c.get("imported") else ("PARTIAL" if c.get("errors") else "OK")
+        runs.finish_run(conn, SRC, run_id, status, pages_scanned=len(report), **c)
+        print(f"DONE run={run_id} status={status} {c} pages={report}")
+        return c
+    except Exception as e:  # noqa: BLE001  crash brutal : on ne laisse pas le run bloqué en RUNNING
+        runs.finish_run(conn, SRC, run_id, "FAILED", last_error=repr(e), **c)
+        print(f"CRASH run={run_id} {e!r} {c}")
+        raise
+    finally:
+        conn.close()
 
 
 def retry(apply=True, max_attempts=MAX_ATTEMPTS):
