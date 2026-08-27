@@ -20,7 +20,7 @@ from . import discover as disc
 from . import naming
 
 SRC = "pv-ca"
-OFFICE = {".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp"}
+OFFICE = {".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp", ".xps"}
 MAX_ATTEMPTS = 3
 CF = {"folder": "Dossier décisionnel", "number": "Numéro de délibération",
       "session": "Référence séance", "url": "URL source officielle",
@@ -67,7 +67,8 @@ def _download(sess, cache: Path, url: str) -> Path:
     r = sess.get(url, timeout=60)
     r.raise_for_status()
     name = naming.clean_text(naming.base_from(url)) or "document"
-    local = cache / (name[:180] + (Path(url.split("#")[0]).suffix or ""))
+    clean = url.split("#")[0].split("?")[0]  # extension propre : sans ?download=true ni #membre
+    local = cache / (name[:180] + (Path(clean).suffix or ""))
     local.write_bytes(r.content)
     return local
 
