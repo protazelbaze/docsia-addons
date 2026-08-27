@@ -13,7 +13,7 @@ import requests
 from ..common import runs
 from ..common.config import env
 from ..common.db import connect
-from ..common.hashing import sha256_file
+from ..common.hashing import sha256_file, md5_file
 from ..common.paperless import Paperless
 from . import discover as disc
 from . import naming
@@ -92,11 +92,14 @@ def process_unit(conn, p, defs, cksums, unit, apply, c):
     try:
         local = Path(unit["local_path"])
         sha = sha256_file(local)
+        md5 = md5_file(local)
         runs.mark(conn, item_id, phase="store", status="STORED", local_path=str(local),
                   sha256=sha, mime_type=unit.get("mime_type"), size_bytes=local.stat().st_size)
         c["stored"] = c.get("stored", 0) + 1
-        if sha in cksums:
-            runs.mark(conn, item_id, status="SKIPPED_ALREADY_PRESENT", paperless_id=cksums[sha])
+        # Paperless 2.x utilise MD5 pour son checksum, v3 le SHA-256 : on couvre les deux.
+        hit = cksums.get(md5) or cksums.get(sha)
+        if hit:
+            runs.mark(conn, item_id, status="SKIPPED_ALREADY_PRESENT", paperless_id=hit)
             return
         if not apply:
             runs.mark(conn, item_id, status="READY_TO_IMPORT")

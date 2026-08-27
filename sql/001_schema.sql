@@ -98,7 +98,8 @@ CREATE INDEX IF NOT EXISTS items_paperless_id_idx  ON recolte.items(paperless_id
 CREATE INDEX IF NOT EXISTS items_expected_title_idx ON recolte.items(expected_title);
 
 -- Vue : phase courante lisible + drapeaux de complétude, pour Metabase.
-CREATE OR REPLACE VIEW recolte.items_phase AS
+DROP VIEW IF EXISTS recolte.items_phase CASCADE;
+CREATE VIEW recolte.items_phase AS
 SELECT
     i.*,
     CASE
@@ -114,7 +115,8 @@ SELECT
 FROM recolte.items i;
 
 -- Vue : complétude par source (pour le dashboard : dernière récolte, avancement, erreurs).
-CREATE OR REPLACE VIEW recolte.completude AS
+DROP VIEW IF EXISTS recolte.completude CASCADE;
+CREATE VIEW recolte.completude AS
 SELECT
     s.source_key,
     s.label,
